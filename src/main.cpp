@@ -35,7 +35,7 @@ ACAN2515 can (MCP2515_CS, SPI, 255) ; // Last parameter is interrupt pin (255 = 
 //   Variables
 //----------------------------------------------------------------------------------------
 static const int LED_BUILTIN = 2; // LED connectée au GPIO2
-static const uint32_t QUARTZ_FREQUENCY = 8UL * 1000UL * 1000UL ; // 8 MHz (ajustez selon votre quartz)
+static const uint32_t QUARTZ_FREQUENCY = 8UL * 1000UL * 1000UL ; // 8 MHz
 
 // Compteurs pour l'affichage
 uint32_t messagesSent = 0;
@@ -60,12 +60,12 @@ void setup()
   //--- Initialize OLED display
   Serial.println("=== ESP32 + MCP2515 CAN + OLED Monitor ===");
   Serial.println("Initialisation de l'afficheur OLED...");
-  
+
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println("❌ ERREUR: Échec initialisation OLED SSD1306!");
     for(;;); // Boucle infinie
   }
-  
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -73,13 +73,13 @@ void setup()
   display.println("ESP32+MCP2515 CAN");
   display.println("Initialisation...");
   display.display();
-  
+
   Serial.println("✅ OLED initialisé avec succès!");
 
   //--- Configure SPI
   Serial.println("Configuration SPI...");
   SPI.begin(MCP2515_SCK, MCP2515_MISO, MCP2515_MOSI);
-  
+
   //--- Configure MCP2515
   Serial.println("Configuration du MCP2515...");
   Serial.print("Pins utilisées - CS: GPIO");
@@ -90,13 +90,13 @@ void setup()
   Serial.print(MCP2515_MOSI);
   Serial.print(", MISO: GPIO");
   Serial.println(MCP2515_MISO);
-  
+
   ACAN2515Settings settings(QUARTZ_FREQUENCY, 500UL * 1000UL) ; // 500 kbps
-  
+
   // Optionnel: configurer les modes
   settings.mRequestedMode = ACAN2515Settings::NormalMode;
   // settings.mRequestedMode = ACAN2515Settings::LoopBackMode; // Pour test sans bus CAN
-  
+
   const uint16_t errorCode = can.begin(settings, [] {
     // Fonction d'interruption (vide car on utilise le polling)
   });
@@ -106,23 +106,45 @@ void setup()
     Serial.print(" Débit réel: ");
     Serial.print(settings.actualBitRate() / 1000);
     Serial.println(" kbps");
-    
+
     updateOLED("MCP2515 OK!", "500 kbps", "Attente comm...", "");
   } else {
-    Serial.print("❌ Erreur configuration MCP2515: 0x");
-    Serial.println(errorCode, HEX);
-    
-    updateOLED("ERREUR MCP2515!", "Code: 0x" + String(errorCode, HEX), "", "");
-    
-    // Affichage des erreurs possibles
-    if (errorCode & ACAN2515Settings::kTooFarFromDesiredBitRate) {
-      Serial.println("   └─ Débit trop éloigné de la valeur demandée");
+    Serial.print("❌ Erreur configuration MCP2515: Code ");
+    Serial.println(errorCode);
+
+    updateOLED("ERREUR MCP2515!", "Code: " + String(errorCode), "", "");
+
+    // Version corrigée pour ACAN2515 - codes d'erreur simples
+    Serial.print("   └─ Description: ");
+    switch(errorCode) {
+      case 1:
+        Serial.println("SPI non configuré");
+        break;
+      case 2:
+        Serial.println("MCP2515 non trouvé - Vérifier les connexions");
+        break;
+      case 3:
+        Serial.println("Paramètres de débit incorrects");
+        break;
+      case 4:
+        Serial.println("Débit trop éloigné de la valeur demandée");
+        break;
+      case 5:
+        Serial.println("Configuration du MCP2515 échouée");
+        break;
+      default:
+        Serial.println("Erreur inconnue");
+        break;
     }
-    if (errorCode & ACAN2515Settings::kIncoherentBitRateSettings) {
-      Serial.println("   └─ Paramètres de débit incohérents");
-    }
+    
+    // Conseils de dépannage
+    Serial.println("🔧 Vérifications suggérées:");
+    Serial.println("   • Connexions SPI (CS, SCK, MOSI, MISO)");
+    Serial.println("   • Alimentation du MCP2515 (3.3V ou 5V)");
+    Serial.println("   • Fréquence du quartz (8MHz, 16MHz, 20MHz)");
+    Serial.println("   • Terminaison du bus CAN si nécessaire");
   }
-  
+
   Serial.println("=== Début de la communication CAN ===");
 }
 
@@ -133,26 +155,26 @@ void updateOLED(String line1, String line2, String line3, String line4) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  
+
   display.setCursor(0, 0);
   display.println(line1);
-  
+
   display.setCursor(0, 12);
   display.println(line2);
-  
+
   display.setCursor(0, 24);
   display.println(line3);
-  
+
   display.setCursor(0, 36);
   display.println(line4);
-  
+
   // Ligne de statistiques
   display.setCursor(0, 48);
   display.print("TX:");
   display.print(messagesSent);
   display.print(" RX:");
   display.print(messagesReceived);
-  
+
   // Indicateur de connexion
   display.setCursor(0, 56);
   if (millis() - lastReceivedTime < 5000 || messagesReceived == 0) {
@@ -164,7 +186,7 @@ void updateOLED(String line1, String line2, String line3, String line4) {
   } else {
     display.print("Status: TIMEOUT");
   }
-  
+
   display.display();
 }
 
@@ -185,7 +207,7 @@ void loop()
     frame.len = 8;    // 8 octets de données
     frame.ext = false; // trame standard (11 bits)
     frame.rtr = false; // data frame
-    
+
     // Données dynamiques pour test
     frame.data[0] = 0x10 + (messagesSent % 16);
     frame.data[1] = 0x20 + (messagesSent % 16);
@@ -197,10 +219,10 @@ void loop()
     frame.data[7] = 0xBB;
 
     const bool frameEnvoye = can.tryToSend(frame);
-    
+
     if (frameEnvoye) {
       messagesSent++;
-      
+
       // Préparer la chaîne des données envoyées
       lastSentData = "";
       for (int i = 0; i < frame.len; i++) {
@@ -209,7 +231,7 @@ void loop()
         lastSentData += String(frame.data[i], HEX);
       }
       lastSentData.toUpperCase();
-      
+
       // Message dans le terminal
       Serial.print("📤 ENVOI #");
       Serial.print(messagesSent);
@@ -221,7 +243,7 @@ void loop()
       Serial.print(" - Longueur: ");
       Serial.print(frame.len);
       Serial.println(" octets");
-      
+
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Blink LED
     }
     else {
@@ -234,7 +256,7 @@ void loop()
   if (can.receive(frameReceived)) {
     messagesReceived++;
     lastReceivedTime = millis();
-    
+
     // Préparer la chaîne des données reçues
     lastReceivedData = "";
     for (int i = 0; i < frameReceived.len; i++) {
@@ -243,7 +265,7 @@ void loop()
       lastReceivedData += String(frameReceived.data[i], HEX);
     }
     lastReceivedData.toUpperCase();
-    
+
     // Message dans le terminal
     Serial.print("📥 RÉCEPTION #");
     Serial.print(messagesReceived);
@@ -255,26 +277,26 @@ void loop()
     Serial.print(" - Longueur: ");
     Serial.print(frameReceived.len);
     Serial.println(" octets");
-    
+
     // Traitement spécifique selon l'ID
     if (frameReceived.id == 0x124) {
       Serial.println("   └─ 💬 Réponse de l'Arduino détectée!");
     } else if (frameReceived.id == 0x123) {
       Serial.println("   └─ 🔄 Message en boucle détecté (LoopBack?)");
     }
-    
+
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Blink LED
   }
 
   // === MISE À JOUR DE L'AFFICHEUR ===
   if (millis() - lastDisplayUpdate > 500) { // Mise à jour toutes les 500ms
     lastDisplayUpdate = millis();
-    
+
     String line1 = "MCP2515 CAN Mon.";
     String line2 = "TX: " + (lastSentData.length() > 0 ? lastSentData.substring(0, 14) : "Aucun");
     String line3 = "RX: " + (lastReceivedData.length() > 0 ? lastReceivedData.substring(0, 14) : "Aucun");
     String line4 = "Up: " + String(millis()/1000) + "s";
-    
+
     updateOLED(line1, line2, line3, line4);
   }
 
@@ -282,7 +304,7 @@ void loop()
   static uint32_t lastStatusMessage = 0;
   if (millis() - lastStatusMessage > 15000) { // Toutes les 15 secondes
     lastStatusMessage = millis();
-    
+
     Serial.println("📊 === RAPPORT DE STATUT MCP2515 ===");
     Serial.print("   Messages envoyés: ");
     Serial.println(messagesSent);
@@ -291,7 +313,7 @@ void loop()
     Serial.print("   Temps de fonctionnement: ");
     Serial.print(millis()/1000);
     Serial.println(" secondes");
-    
+
     if (messagesReceived > 0) {
       Serial.print("   Dernière réception il y a: ");
       Serial.print((millis() - lastReceivedTime)/1000);
@@ -299,13 +321,13 @@ void loop()
     } else {
       Serial.println("   ⚠️  Aucune réception - Vérifier le bus CAN");
     }
-    
-    // Statistiques du MCP2515
+
+    // Statistiques du MCP2515 (fonctions corrigées)
     Serial.print("   Erreurs de transmission: ");
     Serial.println(can.transmitErrorCounter());
     Serial.print("   Erreurs de réception: ");
     Serial.println(can.receiveErrorCounter());
-    
+
     Serial.println("===================================");
   }
 }
