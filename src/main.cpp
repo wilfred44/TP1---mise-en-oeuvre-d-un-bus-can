@@ -1,149 +1,197 @@
-// ===== ESP32 (ACAN2515) =====
-// Modifié pour utiliser ACAN2515 au lieu de ACAN_ESP32
-// Mode NORMAL, 500 kb/s, MCP2515 sur SPI
+// ===== TEST DIAGNOSTIC OLED ESP32 =====
+// Test complet pour identifier le problème OLED
 
-#include <ACAN2515.h>
-#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-//----------------------------------------------------------------------------------------
-//   Configuration
-//----------------------------------------------------------------------------------------
-static const uint32_t DESIRED_BIT_RATE = 500UL * 1000UL;
-static const uint32_t QUARTZ_FREQUENCY = 8UL * 1000UL * 1000UL; // 8 MHz quartz
+// ========== CONFIGURATION ==========
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+#define SDA_PIN 21
+#define SCL_PIN 22
 
-// Pins
-static const byte MCP2515_CS = 5;     // Chip Select
-static const byte ESP32_LED = 2;      // ⚡ CHANGÉ: LED ESP32 (évite le conflit)
+// Testez les 2 adresses courantes
+#define SCREEN_ADDRESS_1 0x3C
+#define SCREEN_ADDRESS_2 0x3D
 
-// Objets
-ACAN2515 can(MCP2515_CS, SPI, 255);   // CS=5, SPI, pas d'interruption
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// Variables
-static uint32_t lastSend = 0;
-
-//----------------------------------------------------------------------------------------
-//   SETUP
-//----------------------------------------------------------------------------------------
 void setup() {
-  pinMode(ESP32_LED, OUTPUT);          // ⚡ CHANGÉ: ESP32_LED au lieu de LED_BUILTIN
-  digitalWrite(ESP32_LED, HIGH);       // ⚡ CHANGÉ: ESP32_LED au lieu de LED_BUILTIN
   Serial.begin(115200);
-  delay(100);
-
-  Serial.println("Configure ESP32 + MCP2515 CAN (normal mode, 500kbps)");
+  delay(2000); // Attendre ouverture Serial Monitor
   
-  // Configuration ESP32 SPI
-  SPI.begin();
+  Serial.println("\n\n========================================");
+  Serial.println("DIAGNOSTIC OLED ESP32");
+  Serial.println("========================================\n");
+
+  // ========== TEST 1: INITIALISATION I2C ==========
+  Serial.println("TEST 1: Initialisation I2C...");
+  Serial.print("  SDA = GPIO ");
+  Serial.println(SDA_PIN);
+  Serial.print("  SCL = GPIO ");
+  Serial.println(SCL_PIN);
   
-  // Configuration ACAN2515
-  ACAN2515Settings settings(QUARTZ_FREQUENCY, DESIRED_BIT_RATE);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Serial.println("  ✅ I2C initialisé\n");
+  delay(500);
+
+  // ========== TEST 2: SCAN I2C ==========
+  Serial.println("TEST 2: Scan du bus I2C...");
+  byte deviceCount = 0;
+  byte foundAddress = 0;
   
-  // Filtre : accepter seulement les trames standard
-  const ACAN2515Mask mask = standard2515Mask(0x7FF, 0x000, 0x000);
-  const ACAN2515AcceptanceFilter filters[] = {
-    {standard2515Filter(0x000, 0x000, 0x000)}  // Accepte tout
-  };
-
-  const uint16_t errorCode = can.begin(settings, [] {}, mask, filters, 1);
-  
-  if (errorCode == 0) {
-    Serial.println("Configuration OK:");
-    Serial.print("  Actual bit rate: "); 
-    Serial.print(settings.actualBitRate()); 
-    Serial.println(" bit/s");
-    Serial.print("  Exact bit rate? "); 
-    Serial.println(settings.exactBitRate() ? "yes" : "no");
-    Serial.print("  Sample point:    "); 
-    Serial.print(settings.samplePointFromBitStart()); 
-    Serial.println("%");
-    Serial.print("  MCP2515 CS Pin:  "); 
-    Serial.println(MCP2515_CS);
-  } else {
-    Serial.print("Configuration error 0x");
-    Serial.println(errorCode, HEX);
-    Serial.println("Vérifiez les connexions MCP2515:");
-    Serial.println("  CS  -> GPIO 5");
-    Serial.println("  SCK -> GPIO 18");
-    Serial.println("  MOSI-> GPIO 23");
-    Serial.println("  MISO-> GPIO 19");
-    Serial.println("  VCC -> 3.3V");
-    Serial.println("  GND -> GND");
-    while (1) { 
-      digitalWrite(ESP32_LED, !digitalRead(ESP32_LED)); // ⚡ CHANGÉ
-      delay(200); 
-    }
-  }
-}
-
-//----------------------------------------------------------------------------------------
-//   LOOP
-//----------------------------------------------------------------------------------------
-void loop() {
-  // ========== RÉCEPTION NON BLOQUANTE ==========
-  CANMessage rx;
-  if (can.receive(rx)) {
-    Serial.print("📥 RX ");
-    Serial.print(rx.ext ? "EXT " : "STD ");
-    Serial.print(rx.rtr ? "RTR " : "DATA ");
-    Serial.print("ID=0x"); 
-    Serial.print(rx.id, HEX);
-    Serial.print(" DLC="); 
-    Serial.print(rx.len);
-    Serial.print(" DATA=");
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    byte error = Wire.endTransmission();
     
-    for (uint8_t i = 0; i < rx.len; i++) { 
-      Serial.print("0x");
-      if (rx.data[i] < 0x10) Serial.print("0");
-      Serial.print(rx.data[i], HEX); 
-      Serial.print(" "); 
-    }
-    Serial.println();
-    
-    // Petit écho LED
-    digitalWrite(ESP32_LED, !digitalRead(ESP32_LED)); // ⚡ CHANGÉ
-    
-    // Traitement spécifique par ID
-    if (rx.id == 0x100) {
-      Serial.println("  -> Message Arduino reçu!");
-    }
-  }
-
-  // ========== ENVOI PÉRIODIQUE ==========
-  if (millis() - lastSend >= 700) {
-    lastSend = millis();
-    
-    CANMessage tx;
-    tx.id  = 0x101;      // Notre ID TX côté ESP32
-    tx.ext = false;      // Trame standard 11 bits
-    tx.rtr = false;      // Data frame
-    tx.len = 8;
-    
-    // Données exemple (modifiables)
-    tx.data[0] = 0x02;   // CMD
-    tx.data[1] = 0x04;   // VALUE_HI
-    tx.data[2] = 0x56;   // VALUE_LO
-    tx.data[3] = (millis() >> 24) & 0xFF; // Timestamp
-    tx.data[4] = (millis() >> 16) & 0xFF;
-    tx.data[5] = (millis() >> 8) & 0xFF;
-    tx.data[6] = millis() & 0xFF;
-    tx.data[7] = 0xAA;   // Marqueur
-
-    const bool ok = can.tryToSend(tx);
-    if (ok) {
-      Serial.println("📤 TX ESP32 -> ID 0x101 OK");
-      Serial.print("   Data: ");
-      for (uint8_t i = 0; i < 8; i++) {
-        Serial.print("0x");
-        if (tx.data[i] < 0x10) Serial.print("0");
-        Serial.print(tx.data[i], HEX);
-        Serial.print(" ");
+    if (error == 0) {
+      Serial.print("  ✅ Device trouvé à l'adresse 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.print(addr, HEX);
+      
+      if (addr == 0x3C || addr == 0x3D) {
+        Serial.print(" <- OLED détecté!");
+        foundAddress = addr;
       }
       Serial.println();
-    } else {
-      Serial.println("❌ TX ESP32 FAILED - Buffer plein?");
+      deviceCount++;
     }
   }
   
-  // Petit délai pour stabilité
-  delay(10);
+  if (deviceCount == 0) {
+    Serial.println("  ❌ AUCUN device I2C détecté!");
+    Serial.println("\n⚠️ PROBLÈME DÉTECTÉ:");
+    Serial.println("  1. Vérifiez le câblage:");
+    Serial.println("     OLED VCC -> ESP32 3.3V");
+    Serial.println("     OLED GND -> ESP32 GND");
+    Serial.println("     OLED SDA -> ESP32 GPIO 21");
+    Serial.println("     OLED SCL -> ESP32 GPIO 22");
+    Serial.println("  2. Vérifiez l'alimentation OLED");
+    Serial.println("  3. Essayez un autre module OLED");
+    while(1) { delay(1000); }
+  } else {
+    Serial.print("\n  Total: ");
+    Serial.print(deviceCount);
+    Serial.println(" device(s) trouvé(s)\n");
+  }
+
+  // ========== TEST 3: INITIALISATION OLED ==========
+  Serial.println("TEST 3: Initialisation OLED...");
+  
+  bool oledOK = false;
+  byte workingAddress = 0;
+
+  // Test adresse 0x3C
+  Serial.print("  Test adresse 0x3C... ");
+  if (display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS_1)) {
+    Serial.println("✅ OK");
+    oledOK = true;
+    workingAddress = SCREEN_ADDRESS_1;
+  } else {
+    Serial.println("❌ Échec");
+    
+    // Test adresse 0x3D
+    Serial.print("  Test adresse 0x3D... ");
+    if (display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS_2)) {
+      Serial.println("✅ OK");
+      oledOK = true;
+      workingAddress = SCREEN_ADDRESS_2;
+    } else {
+      Serial.println("❌ Échec");
+    }
+  }
+
+  if (!oledOK) {
+    Serial.println("\n❌ ÉCHEC INITIALISATION OLED");
+    Serial.println("\n⚠️ CAUSES POSSIBLES:");
+    Serial.println("  1. Mauvaise résolution (essayez 128x32 au lieu de 128x64)");
+    Serial.println("  2. Module OLED défectueux");
+    Serial.println("  3. Alimentation insuffisante");
+    
+    if (foundAddress > 0) {
+      Serial.print("  4. Device I2C détecté à 0x");
+      Serial.print(foundAddress, HEX);
+      Serial.println(" mais pas compatible SSD1306");
+    }
+    
+    while(1) { delay(1000); }
+  }
+
+  // ========== TEST 4: AFFICHAGE ==========
+  Serial.println("\nTEST 4: Test affichage...");
+  Serial.print("  Adresse utilisée: 0x");
+  Serial.println(workingAddress, HEX);
+  
+  // Test 1: Effacer écran
+  Serial.println("  - Effacement écran");
+  display.clearDisplay();
+  display.display();
+  delay(500);
+
+  // Test 2: Afficher un pixel
+  Serial.println("  - Affichage pixel");
+  display.drawPixel(64, 32, SSD1306_WHITE);
+  display.display();
+  delay(1000);
+
+  // Test 3: Afficher texte
+  Serial.println("  - Affichage texte");
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("OLED"));
+  display.println(F("OK!"));
+  display.setTextSize(1);
+  display.print(F("Addr: 0x"));
+  display.println(workingAddress, HEX);
+  display.display();
+  delay(2000);
+
+  // Test 4: Animation
+  Serial.println("  - Test animation");
+  for (int i = 0; i < 3; i++) {
+    display.invertDisplay(true);
+    delay(200);
+    display.invertDisplay(false);
+    delay(200);
+  }
+
+  // ========== RÉSULTAT FINAL ==========
+  Serial.println("\n========================================");
+  Serial.println("✅ DIAGNOSTIC TERMINÉ - OLED OK!");
+  Serial.println("========================================");
+  Serial.print("Adresse I2C fonctionnelle: 0x");
+  Serial.println(workingAddress, HEX);
+  Serial.println("\nCopiez cette ligne dans votre code:");
+  Serial.print("#define SCREEN_ADDRESS 0x");
+  Serial.println(workingAddress, HEX);
+  Serial.println("========================================\n");
+}
+
+void loop() {
+  // Animation de test continue
+  static unsigned long lastUpdate = 0;
+  static int counter = 0;
+  
+  if (millis() - lastUpdate > 1000) {
+    lastUpdate = millis();
+    counter++;
+    
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.println(F("TEST"));
+    display.setTextSize(1);
+    display.print(F("Count: "));
+    display.println(counter);
+    display.print(F("Millis: "));
+    display.println(millis() / 1000);
+    display.display();
+    
+    Serial.print("Loop: ");
+    Serial.println(counter);
+  }
 }
